@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Staff Attendance System</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #eef2f3; text-align: center; padding: 20px; }
+        .container { background: white; max-width: 400px; margin: auto; padding: 25px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        h2 { color: #333; margin-bottom: 20px; }
+        
+        video, img { width: 100%; border-radius: 10px; border: 2px solid #ddd; margin-bottom: 15px; }
+        #snapshot { display: none; } 
+        
+        button {
+            background-color: #28a745; color: white; border: none; padding: 15px; width: 100%;
+            font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; transition: background 0.3s;
+        }
+        button:hover { background-color: #218838; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+
+        .status { margin-top: 15px; font-size: 15px; font-weight: 500; }
+        .error { color: #d9534f; }
+        .success { color: #28a745; }
+        
+        #debug-log {
+            margin-top: 20px; text-align: left; font-size: 11px; color: #666; 
+            background: #f8f9fa; padding: 10px; border: 1px solid #ddd; display: none;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>📷 Daily Attendance</h2>
+        
+        <video id="video" autoplay playsinline muted></video>
+        
+        <img id="snapshot" alt="Captured Photo">
+        
+        <canvas id="canvas" style="display:none;"></canvas>
+
+        <p id="location-status" style="color: #666;">Waiting for location...</p>
+        
+        <button id="checkin-btn">MARK ATTENDANCE</button>
+        
+        <p class="status" id="status-msg"></p>
+
+        <div id="debug-log"></div>
+    </div>
+
+    <script>
+        // --- YOUR CREDENTIALS (ALREADY FILLED) ---
+        const BOT_TOKEN = "8257172651:AAHpFbuTNiF0r8EaiHRVKi6hbj_OgzAVpT4";
+        const CHAT_ID = "1575837311";
+        // -----------------------------------------
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const snapshot = document.getElementById('snapshot');
+        const btn = document.getElementById('checkin-btn');
+        const statusMsg = document.getElementById('status-msg');
+        const locStatus = document.getElementById('location-status');
+        const debugLog = document.getElementById('debug-log');
+
+        let currentLat = null;
+        let currentLong = null;
+
+        function logError(msg) {
+            debugLog.style.display = 'block';
+            debugLog.innerHTML += "• " + msg + "<br>";
+            console.error(msg);
+        }
+
+        // 1. Initialize Camera
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+                video.srcObject = stream;
+            } catch (err) {
+                statusMsg.innerText = "Camera Error! Check permissions.";
+                statusMsg.className = "status error";
+                logError("Camera Error: " + err.message);
+            }
+        }
+
+        // 2. Get Location
+        function getLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        currentLat = position.coords.latitude;
+                        currentLong = position.coords.longitude;
+                        locStatus.innerText = `📍 Location Found: ${currentLat.toFixed(4)}, ${currentLong.toFixed(4)}`;
+                        locStatus.style.color = "#28a745";
+                    },
+                    (error) => {
+                        let errText = "Unknown error";
+                        switch(error.code) {
+                            case error.PERMISSION_DENIED: errText = "User denied location."; break;
+                            case error.POSITION_UNAVAILABLE: errText = "Location signal weak."; break;
+                            case error.TIMEOUT: errText = "Location request timed out."; break;
+                        }
+                        locStatus.innerText = "⚠️ " + errText;
+                        locStatus.className = "error";
+                        logError("GPS Error: " + errText);
+                    }
+                );
+            } else {
+                locStatus.innerText = "Geolocation not supported.";
+            }
+        }
+
+        // Start systems
+        startCamera();
+        getLocation();
+
+        // 3. Handle Click
+        btn.addEventListener('click', () => {
+            if (!currentLat) {
+                alert("Please allow location access first!");
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerText = "Sending...";
+            statusMsg.innerText = "";
+
+            // Capture Frame
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Convert to Blob and Send
+            canvas.toBlob((blob) => {
+                sendToTelegram(blob);
+                
+                // Switch view
+                snapshot.src = URL.createObjectURL(blob);
+                snapshot.style.display = "block";
+                video.style.display = "none";
+            }, 'image/jpeg', 0.8);
+        });
+
+        // 4. Send Function
+        function sendToTelegram(imageBlob) {
+            const formData = new FormData();
+            formData.append("chat_id", CHAT_ID);
+            formData.append("photo", imageBlob, "attendance.jpg");
+            
+            // Correct Google Maps Link
+            const mapLink = `https://www.google.com/maps?q=${currentLat},${currentLong}`;
+            const caption = `✅ *Attendance Marked*\n\n📍 *Lat:* ${currentLat}\n📍 *Long:* ${currentLong}\n\n🔗 [View on Map](${mapLink})\n📅 *Time:* ${new Date().toLocaleString()}`;
+            
+            formData.append("caption", caption);
+            formData.append("parse_mode", "Markdown");
+
+            fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.ok) {
+                    statusMsg.innerText = "✅ Attendance Sent Successfully!";
+                    statusMsg.className = "status success";
+                    btn.innerText = "DONE";
+                } else {
+                    throw new Error(data.description || "Telegram API Error");
+                }
+            })
+            .catch(error => {
+                statusMsg.innerText = "❌ Failed. See Debug Log.";
+                statusMsg.className = "status error";
+                btn.disabled = false;
+                btn.innerText = "TRY AGAIN";
+                logError("Send Error: " + error.message);
+            });
+        }
+    </script>
+</body>
+</html>
